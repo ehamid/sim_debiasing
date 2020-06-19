@@ -145,6 +145,14 @@ function f_hat(t, μs)
     end
     return u
 end
+function f_hat_prime(t, μs)
+    u = zeros(length(t))
+    for j in 2:length(μs)
+        u .+= μs[j] .* hermite(t, j-2) .* sqrt(j-1)
+    end
+    return u
+end
+
 
 l = 4
 plot(-l:0.05:l, [f(-l:0.05:l), f_hat(-l:0.05:l, μs)],
@@ -158,6 +166,16 @@ plot(-l:0.05:l, [f(-l:0.05:l), f_hat(-l:0.05:l, μs)],
 ylabel!(L"$g(t)$")
 xlabel!(L"$t$")
 # savefig("linkplot.png")
+
+
+plot(-l:0.05:l, [5 .* cos.(-l:0.05:l), f_hat_prime(-l:0.05:l, μs)],
+    color=[:deepskyblue :darkorange],
+    legend=:topleft,
+    linestyle=[:dash :solid],
+    xlabel=L"$t$",
+    ylabel=L"$g(t)$",
+    labels=[(L"$g$ : True Link Function ") L"$\hat{g}$ : Cubic Hermite Estimate"],
+    title="True and Estimated Link Functions")
 
 
 #---
