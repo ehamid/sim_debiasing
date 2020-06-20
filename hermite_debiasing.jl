@@ -23,11 +23,12 @@ function hermite_coefs(y, X, τ_pilot, d)
     return (mean(y .* hermite(X * τ_pilot, d)))
 end
 
-function dlasso(y, X, τ_pilot, λ_lasso, Σ, Σ_inv, deb_ind, hermite_deg)
-    β_lasso = glmnet(X,y,lambda=[λ_lasso],intercept=false).betas[:,1]
-    τ_lasso = β_lasso ./ sqrt(β_lasso' * Σ * β_lasso)
+function dlasso(y, X, β_pilot, λ_lasso, Σ, Σ_inv, deb_ind, hermite_deg)
+    # β_lasso = glmnet(X,y,lambda=[λ_lasso],intercept=false).betas[:,1]
+    # τ_lasso = β_lasso ./ sqrt(β_lasso' * Σ * β_lasso)
     u = X * Σ_inv[:,deb_ind]
     # u = (Σ \ X')'[:,deb_ind]
+    τ_pilot = β_pilot ./ sqrt(β_pilot' * Σ * β_pilot)
     y_mean = mean(y)
 
     h = zeros(length(y))
@@ -37,7 +38,7 @@ function dlasso(y, X, τ_pilot, λ_lasso, Σ, Σ_inv, deb_ind, hermite_deg)
             h = h .+ (hermite_coefs(y, X, τ_pilot, deg) .* hermite(X * τ_pilot, deg))
         end
     end
-    β_dlasso = β_lasso[deb_ind] + sum(u .* (y - X * β_lasso - h)) / sum(u .* X[:,deb_ind])
+    β_dlasso = β_pilot[deb_ind] + sum(u .* (y - X * β_pilot - h)) / sum(u .* X[:,deb_ind])
     return β_dlasso
 end
 
@@ -50,15 +51,15 @@ function ss_dlasso(y, X, λ_lasso, Σ, Σ_inv, deb_ind, hermite_deg)
 
     if hermite_deg == 1
         τ_pilot = 0
-        return dlasso(y, X, τ_pilot, λ_lasso[1], Σ, Σ_inv, deb_ind, hermite_deg)
+        return dlasso(y, X, β_pilot, λ_lasso[1], Σ, Σ_inv, deb_ind, hermite_deg)
     else
-        τ_pilot1 = glmnet(X2,y2,lambda=[λ_lasso[2]],intercept=false).betas[:,1]
-        τ_pilot1 = τ_pilot1 ./ sqrt(τ_pilot1' * Σ * τ_pilot1)
-        β_deb1 = dlasso(y1, X1, τ_pilot1, λ_lasso[2], Σ, Σ_inv, deb_ind, hermite_deg)
+        β_pilot1 = glmnet(X2,y2,lambda=[λ_lasso[2]],intercept=false).betas[:,1]
+        # τ_pilot1 = τ_pilot1 ./ sqrt(τ_pilot1' * Σ * τ_pilot1)
+        β_deb1 = dlasso(y1, X1, β_pilot1, λ_lasso[2], Σ, Σ_inv, deb_ind, hermite_deg)
 
-        τ_pilot2 = glmnet(X1,y1,lambda=[λ_lasso[2]],intercept=false).betas[:,1]
-        τ_pilot2 = τ_pilot2 ./ sqrt(τ_pilot2' * Σ * τ_pilot2)
-        β_deb2 = dlasso(y2, X2, τ_pilot2, λ_lasso[2], Σ, Σ_inv, deb_ind, hermite_deg)
+        β_pilot2 = glmnet(X1,y1,lambda=[λ_lasso[2]],intercept=false).betas[:,1]
+        # τ_pilot2 = τ_pilot2 ./ sqrt(τ_pilot2' * Σ * τ_pilot2)
+        β_deb2 = dlasso(y2, X2, β_pilot2, λ_lasso[2], Σ, Σ_inv, deb_ind, hermite_deg)
         return mean([β_deb1 β_deb2])
     end
 end
@@ -126,6 +127,9 @@ for d in 1:hermite_deg
         y = f(X * τ) .+ 0.1 .* ϵ
         # b[i,d] = dlasso(y,X,τ, λ_cv, Σ, 1, d)
         b_ss[i,d] = ss_dlasso(y, X, [λ_cv λ_cv2], Σ, Σ_inv, deb_ind, d)
+        if i % 100 == 0
+            print(" $i, ")
+        end
     end
     print("\nd: $d")
 end
@@ -161,22 +165,20 @@ xlabel!(L"$t$")
 
 
 #---
-println("bias: ", mean(b_ss, dims = 1) .-  β[deb_ind])
-println("std dev: ", sqrt.(var(b_ss, dims = 1)))
-histogram(b_ss, alpha = 0.2)
+println("\nbias: \t\t", round.(mean(b_ss, dims = 1) .-  β[deb_ind], digits=6))
+println("\nstd dev: \t", round.(sqrt.(var(b_ss, dims = 1)), digits=6))
+print("\nRMSE: \t\t", round.(sqrt.(mean((b_ss .- β[deb_ind]).^2, dims = 1)), digits=6))
 
-boxplot(b_ss .- β[1], legend=:bottomleft)
+
+boxplot(b_ss .- β[1], legend=:best)
 hline!([0], linestyle=:dot, label="True β[1]",
     linewidth = 2, linecolor = :red)
 
-print("RMSE: ", sqrt.(mean((b_ss .- β[deb_ind]).^2, dims = 1)))
 
-histogram(b_ss[:,1] )
-plot(kde(b_ss[:,1]))
-
-histogram(b_ss .- β[1], normed=true, alpha=0.3,
- color=[:deepskyblue :orange], label=[], legend=:topright)
-density(b_ss .- β[1], label=["Order $j Hermite Expansion" for j in 1:5])
+histogram(b_ss[:,[1,5]] .- β[1], normed=true,
+            alpha=0.3, legend=:topright)
+density!(b_ss[:,[1,5]] .- β[1])
+vline!([0], linestyle=:dot)
 xlabel!(L"$\tilde{\beta}_1 - \beta_1$")
 title!("Histogram of Centered Estimates")
 ylabel!("Frequency")
