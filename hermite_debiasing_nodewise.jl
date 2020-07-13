@@ -23,10 +23,11 @@ function hermite(x,d)
     elseif d == 8
         return (x .^ 8 .- 28 .* x .^ 6 .+ 210 .* x .^ 4 .- 420 .* x .^ 2 .+ 105) ./ sqrt(40320)
     elseif d == 9
-
+        return (x .^ 9 .- 36 .* x .^ 7 .+ 378 .* x .^ 5 .- 1260 .* x .^ 3 .+ 945 .* x) ./ sqrt(362880)
+    elseif d == 10
+        return (x .^ 10 .- 45 .* x .^ 8 .+ 630 .* x .^ 6 .- 3150 .* x .^ 4 .+ 4725 .* x .^ 2 .- 945) ./ sqrt(3628800)
     end
 end
-
 
 function hermite_coefs(y, X, τ_pilot, d)
     return (mean(y .* hermite(X * τ_pilot, d)))
@@ -157,7 +158,7 @@ cv_nodewise = glmnetcv(X[:,1:end .!=deb_ind], X[:,deb_ind], nfolds = 50,
 #---
 Random.seed!(123)
 nreps = 1000
-hermite_deg = 5
+hermite_deg = 10
 b = ones((nreps,hermite_deg))
 deb_ind = 1
 
@@ -202,9 +203,9 @@ xlabel!(L"$t$")
 
 
 #---
-println("\nbias: \t\t", round.( (mean(b, dims = 1) .-  β[deb_ind]), digits=6))
-println("\nstd dev: \t", round.(sqrt.( var(b, dims = 1)), digits=6))
-print("\nRMSE: \t\t", round.(sqrt.(mean((b .- β[deb_ind]).^2, dims = 1)), digits=6))
+println("\nbias: \t\t", round.( sqrt(n) .* (mean(b, dims = 1) .-  β[deb_ind]), digits=3))
+println("\nstd dev: \t", round.(sqrt.( n.* var(b, dims = 1,corrected=false)), digits=3))
+print("\nRMSE: \t\t", round.(sqrt.( n.* mean((b .- β[deb_ind]).^2, dims = 1)), digits=3))
 
 
 boxplot(b, legend=:best)
@@ -235,8 +236,8 @@ b_s = copy(b)
 
 Random.seed!(123)
 
-p = 3000
-n = 2000
+p = 2000
+n = 1000
 
 s = 10
 τ = [collect(s:-1:1); zeros(p - s)]
@@ -254,7 +255,7 @@ X .= copy(rand(P_X, n)')
 y .= f(X * τ) .+ 0.1 .* ϵ
 
 
-folds = 500
+folds = 100
 leaveout = Int(floor(n / folds))
 
 n_i = Int((folds - 1) * leaveout)
@@ -263,19 +264,56 @@ y_i = zeros(n_i)
 
 b_jack = zeros((folds, hermite_deg))
 indices=collect(1:n)
+repl=20
+v = zeros((repl, hermite_deg))
+for rep in 1:repl
+    X .= copy(rand(P_X, n)')
+    ϵ .= rand(Normal(0,1), n)
+    y .= f(X * τ) .+ 0.1 .* ϵ
 
-for d in 1:hermite_deg
-    println(d)
-    for i in 1:folds
-            if i%100 == 0
-                print(" , $i ")
-            end
-        # indices = [j for j in 1:n if j ∉ (i-1)*leaveout+1:i*leaveout]
-        indices .= sample(1:n, n, replace=true)
-        # X_i .= X[indices,:]
-        # y_i .= y[indices]
-        b_jack[i,d] = ss_dlasso(y[indices], X[indices,:], sqrt(n / n_i) .* [λ_cv1, λ_cv2], λ_nodewise, deb_ind, d)
+    for d in 1:hermite_deg
+        println(d)
+        for i in 1:folds
+                if i%100 == 0
+                    print(" , $i ")
+                end
+            indices = [j for j in 1:n if j ∉ (i-1)*leaveout+1:i*leaveout]
+            # indices .= sample(1:n, n, replace=true)
+            # X_i .= X[indices,:]
+            # y_i .= y[indices]
+            b_jack[i,d] = ss_dlasso(y[indices], X[indices,:], sqrt(n/n_i).*[λ_cv1, λ_cv2], sqrt(n/n_i)* λ_nodewise, deb_ind, d)
+        end
     end
+    v[rep,:] = var(b_jack, dims=1)
 end
 
-print(round.(sqrt.(var(b_jack, dims=1)), digits=6))
+print(round.((var(b_jack, dims=1)), digits=6))
+
+#---
+plot(mean((b .- β[1]).^2, dims=1)')
+
+print(round.(mean((b .- β[1]).^2, dims=1), digits=6))
+print(round.(std((b .- β[1]).^2, dims=1) ./ sqrt(nreps), digits=6))
+
+#---
+colors = [:deepskyblue :darkorange]
+plot([(mean((b .- β[deb_ind]).^2, dims = 1))'],
+ markershape=:diamond, label="Mean Squared Error", legend=:topright,
+  color=colors[1],linewidth=1.5, yerror=std((b .- β[deb_ind]).^2, dims = 1)'./sqrt(nreps))
+
+plot(mean(v,dims=1)',
+   markershape=:diamond, label="Bootstrap Estimate of Variance", legend=:topright,
+    color=colors[2],linewidth=1.5,yerror=std(v,dims=1)'./ sqrt(10))
+
+# plot!([0.002944 0.003642 0.00128 0.001374 0.001248 0.001484 0.001673 0.001453 0.001275 0.001344]',
+#    markershape=:diamond, label="MSE", legend=:topright,
+#     color=colors[2],linewidth=1.5,
+#      yerror=[0.000128 0.000155 6.6e-5 6.8e-5 7.4e-5 0.000133 0.000185 0.000101 6.3e-5 0.000123]')
+
+
+plot!((var(b_jack, dims = 1))',
+   markershape=:diamond, label="Bootstrap Estimate of Variance", legend=:topright,
+    color=colors[2],linewidth=1.5, alpha = 0.5)
+xlabel!("Degree of Hermite Expansion")
+title!(L"Accuracy of Estimators (known $\Sigma$)")
+savefig("knownSigma.png")
