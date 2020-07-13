@@ -16,15 +16,24 @@ function hermite(x,d)
         return (x .^ 4 .- 6 .* x .^ 2 .+ 3) ./ sqrt(24)
     elseif d == 5
         return (x .^ 5 .- 10 .* x .^ 3 .+ 15 .* x) ./ sqrt(120)
+    elseif d == 6
+        return (x .^ 6 .- 15 .* x .^4 .+ 45 .* x .^ 2 .- 15) ./ sqrt(720)
+    elseif d == 7
+        return (x .^ 7 .- 21 .* x .^ 5 .+ 105 .* x .^ 3 .- 105 .* x) ./ sqrt(5040)
+    elseif d == 8
+        return (x .^ 8 .- 28 .* x .^ 6 .+ 210 .* x .^ 4 .- 420 .* x .^ 2 .+ 105) ./ sqrt(40320)
+    elseif d == 9
+
     end
 end
+
 
 function hermite_coefs(y, X, τ_pilot, d)
     return (mean(y .* hermite(X * τ_pilot, d)))
 end
 
-function dlasso(y, X, τ_pilot, μs, Σ, Σ_inv, deb_ind, hermite_deg)
-    u = X * Σ_inv[:,deb_ind]
+function dlasso(y, X, τ_pilot, μs, Σ, γ, deb_ind, hermite_deg)
+    u = X[:,deb_ind] - X[:, 1:end .!=deb_ind] * γ
     h = μs[1] .* ones(length(y))
 
     for deg in 1:hermite_deg
@@ -62,18 +71,21 @@ end
 
 
 
-function ss_dlasso(y, X, λ_lasso, Σ, Σ_inv, deb_ind, hermite_deg)
+function ss_dlasso(y, X, λ_lasso, λ_nodewise, deb_ind, hermite_deg)
     mid = Int(floor(length(y) / 2))
     y1 = y[1:mid]
     X1 = X[1:mid,:]
     y2 = y[mid+1:end]
     X2 = X[mid+1:end,:]
 
-        τ_pilot1, μs1 = ss_estimates(y1, X1, Σ, λ_lasso, hermite_deg)
-        β_deb1 = dlasso(y2, X2, τ_pilot1, μs1, Σ, Σ_inv, deb_ind, hermite_deg)
+    Σ_hat = X' * X ./ length(y)
+    γ = glmnet(X[:,1:end .!=deb_ind], X[:,deb_ind],lambda=[λ_nodewise],intercept=false).betas[:,1]
 
-        τ_pilot2, μs2 = ss_estimates(y2, X2, Σ, λ_lasso, hermite_deg)
-        β_deb2 = dlasso(y1, X1, τ_pilot2, μs2, Σ, Σ_inv, deb_ind, hermite_deg)
+        τ_pilot1, μs1 = ss_estimates(y1, X1, Σ_hat, λ_lasso, hermite_deg)
+        β_deb1 = dlasso(y2, X2, τ_pilot1, μs1, Σ_hat, γ, deb_ind, hermite_deg)
+
+        τ_pilot2, μs2 = ss_estimates(y2, X2, Σ_hat, λ_lasso, hermite_deg)
+        β_deb2 = dlasso(y1, X1, τ_pilot2, μs2, Σ_hat, γ, deb_ind, hermite_deg)
 
         return mean([β_deb1 β_deb2])
 end
@@ -106,8 +118,8 @@ plot(-4:0.1:4, f(-4:0.1:4), linewidth=2)
 #---
 Random.seed!(123)
 
-p = 3000
-n = 2000
+p = 2000
+n = 1000
 
 s = 10
 τ = [collect(s:-1:1); zeros(p - s)]
@@ -124,20 +136,27 @@ X = copy(rand(P_X, n)')
 ϵ = rand(Normal(0,1), n)
 y = f(X * τ) .+ 0.1 .* ϵ
 
+deb_ind = 1
 
-
-cv1 = glmnetcv(X[1:Int(floor(n/2)),:],y[1:Int(floor(n/2))],nfolds = 50)
+cv1 = glmnetcv(X[1:Int(floor(n/2)),:],y[1:Int(floor(n/2))],nfolds = 50,
+    intercept=false)
 λ_cv1 = cv1.lambda[argmin(cv1.meanloss)]
 τ_pilot = cv1.path.betas[:, argmin(cv1.meanloss)]
 τ_pilot = τ_pilot ./ √(τ_pilot' * Σ * τ_pilot)
 
-cv2 = glmnetcv(X[1:Int(floor(n/4)),:],y[1:Int(floor(n/4))],nfolds = 50)
+cv2 = glmnetcv(X[1:Int(floor(n/4)),:],y[1:Int(floor(n/4))],nfolds = 50,
+    intercept=false)
 λ_cv2 = cv2.lambda[argmin(cv2.meanloss)]
+
+cv_nodewise = glmnetcv(X[:,1:end .!=deb_ind], X[:,deb_ind], nfolds = 50,
+    intercept=false)
+λ_nodewise = cv_nodewise.lambda[argmin(cv_nodewise.meanloss)]
+
 
 
 #---
 Random.seed!(123)
-nreps = 500
+nreps = 1000
 hermite_deg = 5
 b = ones((nreps,hermite_deg))
 deb_ind = 1
@@ -153,7 +172,7 @@ for d in 1:hermite_deg
         X .= rand(P_X, n)'
         ϵ .= rand(Normal(0,1), n)
         y .= f(X * τ) .+ 0.1 .* ϵ
-        b[i,d] = ss_dlasso(y, X, [λ_cv1, λ_cv2], Σ, Σ_inv, deb_ind, d)
+        b[i,d] = ss_dlasso(y, X, [λ_cv1, λ_cv2], λ_nodewise, deb_ind, d)
     end
 end
 
@@ -168,21 +187,23 @@ function f_hat(t, μs)
     return u
 end
 
-l = 4
+l = 3
 plot(-l:0.05:l, [f(-l:0.05:l), f_hat(-l:0.05:l, μs)],
     color=[:deepskyblue :darkorange],
     legend=:topleft,
     linestyle=[:dash :solid],
     xlabel=L"$t$",
     ylabel=L"$g(t)$",
-    labels=[(L"$g$ : True Link Function ") L"$\hat{g}$ : $5^{th}$ order Hermite Estimate"],
+    labels=[(L"$g$ : True Link Function ") L"$\hat{g}$ : Cubic Hermite Estimate"],
     title="True and Estimated Link Functions")
-savefig("link.png")
+ylabel!(L"$g(t)$")
+xlabel!(L"$t$")
+# savefig("linkplot.png")
 
 
 #---
-println("\nbias: \t\t", round.((mean(b, dims = 1) .-  β[deb_ind]), digits=6))
-println("\nstd dev: \t", round.(sqrt.(var(b, dims = 1)), digits=6))
+println("\nbias: \t\t", round.( (mean(b, dims = 1) .-  β[deb_ind]), digits=6))
+println("\nstd dev: \t", round.(sqrt.( var(b, dims = 1)), digits=6))
 print("\nRMSE: \t\t", round.(sqrt.(mean((b .- β[deb_ind]).^2, dims = 1)), digits=6))
 
 
@@ -191,14 +212,9 @@ hline!([β[1]], linestyle=:dot, label="True β[1]",
     linewidth = 2, linecolor = :red)
 
 
-colors = [:deepskyblue :darkorange]
 histogram(b[:,[1,5]] .- β[1], normed=true,
-            alpha=0.2, legend=:topleft,
-            color=colors,
-            labels=:none)
-density!(b[:,[1,5]] .- β[1], color=colors,
-    labels= ["1st Order Expansion" "5th Order Expansion"],
-    linestyle=[:dash :solid])
+            alpha=0.3, legend=:topright)
+density!(b[:,[1,5]] .- β[1])
 vline!([0], linestyle=:dot)
 xlabel!(L"$\tilde{\beta}_1 - \beta_1$")
 title!("Histogram of Centered Estimates")
@@ -206,18 +222,60 @@ ylabel!("Frequency")
 savefig("histogram.png")
 
 
-#---
-plot([sqrt.(mean((b .- β[deb_ind]).^2, dims = 1))'],
- markershape=:diamond, label=L"Known $\Sigma$", legend=:topright,
-  color=colors[1],linewidth=1.5)
-plot!([0.036154 0.040688 0.021514 0.022343 0.020316]',
- linestyle=:dash, markershape=:diamond, label=L"Unknown $\Sigma$",
-  color=colors[2],linewidth=1.5)
-xlabel!("Degree of Hermite Expansion")
-ylabel!("RMSE")
-savefig("RMSE.png")
 
 
 #---
 b_sc = copy(b)
 b_s = copy(b)
+
+
+
+#---
+#Jacknife
+
+Random.seed!(123)
+
+p = 3000
+n = 2000
+
+s = 10
+τ = [collect(s:-1:1); zeros(p - s)]
+ρ = 0.5
+Σ = [ρ^abs(i-j) for i in 1:p, j in 1:p]
+Σ_inv = inv(Σ)
+τ = τ / sqrt(τ' * Σ * τ)
+P_X = MvNormal(zeros(p), Σ)
+
+
+β = μ .* τ
+
+X .= copy(rand(P_X, n)')
+ϵ .= rand(Normal(0,1), n)
+y .= f(X * τ) .+ 0.1 .* ϵ
+
+
+folds = 500
+leaveout = Int(floor(n / folds))
+
+n_i = Int((folds - 1) * leaveout)
+X_i = zeros((n_i, p))
+y_i = zeros(n_i)
+
+b_jack = zeros((folds, hermite_deg))
+indices=collect(1:n)
+
+for d in 1:hermite_deg
+    println(d)
+    for i in 1:folds
+            if i%100 == 0
+                print(" , $i ")
+            end
+        # indices = [j for j in 1:n if j ∉ (i-1)*leaveout+1:i*leaveout]
+        indices .= sample(1:n, n, replace=true)
+        # X_i .= X[indices,:]
+        # y_i .= y[indices]
+        b_jack[i,d] = ss_dlasso(y[indices], X[indices,:], sqrt(n / n_i) .* [λ_cv1, λ_cv2], λ_nodewise, deb_ind, d)
+    end
+end
+
+print(round.(sqrt.(var(b_jack, dims=1)), digits=6))
